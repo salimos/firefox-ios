@@ -33,11 +33,11 @@ public protocol BrowserHistory {
  * synced by a `HistorySynchronizer`.
  */
 public protocol SyncableHistory {
-    func ensurePlaceWithURL(url: String, hasGUID guid: GUID) -> Deferred<Result<()>>
-    func changeGUID(old: GUID, new: GUID) -> Deferred<Result<()>>
-    func deleteByGUID(guid: GUID, deletedAt: Timestamp) -> Deferred<Result<()>>
+    func ensurePlaceWithURL(url: String, hasGUID guid: GUID) -> Success
+    func changeGUID(old: GUID, new: GUID) -> Success
+    func deleteByGUID(guid: GUID, deletedAt: Timestamp) -> Success
 
-    func insertOrReplaceRemoteVisits(visits: [Visit], forGUID guid: GUID) -> Deferred<Result<()>>
+    func insertOrReplaceRemoteVisits(visits: [Visit], forGUID guid: GUID) -> Success
     func insertOrUpdatePlace(place: RemotePlace) -> Deferred<Result<GUID>>
 }
 
