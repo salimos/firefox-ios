@@ -51,6 +51,15 @@ public func succeed() -> Success {
     return deferResult(())
 }
 
+/**
+ * Return a single Deferred that represents the sequential chaining
+ * of f over the provided items.
+ */
+public func walk<T>(items: [T], f: T -> Success) -> Success {
+    return items.reduce(succeed()) { success, item -> Success in
+        success >>> { f(item) }
+    }
+}
 
 public func chainDeferred<T, U>(a: Deferred<Result<T>>, f: T -> Deferred<Result<U>>) -> Deferred<Result<U>> {
     return a.bind { res in
