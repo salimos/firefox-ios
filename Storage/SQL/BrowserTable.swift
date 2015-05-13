@@ -12,11 +12,9 @@ let TableBookmarks = "bookmarks"
 
 let TableFavicons = "favicons"
 let TableHistory = "history"
-let TableRemoteVisits = "remote_visits"
-let TableLocalVisits = "local_visits"
+let TableVisits = "visits"
 let TableFaviconSites = "favicon_sites"
 
-let ViewAllVisits = "all_visits"
 let ViewWidestFaviconsForSites = "view_favicons_widest"
 let ViewHistoryIDsWithWidestFavicons = "view_history_id_favicon"
 let ViewIconForURL = "view_icon_for_url"
@@ -25,15 +23,12 @@ private let AllTables: Args = [
     TableFaviconSites,
 
     TableHistory,
-
-    TableRemoteVisits,
-    TableLocalVisits,
+    TableVisits,
 
     TableBookmarks,
 ]
 
 private let AllViews: Args = [
-    ViewAllVisits,
     ViewHistoryIDsWithWidestFavicons,
     ViewWidestFaviconsForSites,
     ViewIconForURL,
@@ -49,7 +44,7 @@ private let log = XCGLogger.defaultInstance()
  */
 public class BrowserTable: Table {
     var name: String { return "BROWSER" }
-    var version: Int { return 2 }
+    var version: Int { return 3 }
 
     public init() {
     }
@@ -120,34 +115,24 @@ public class BrowserTable: Table {
         "title TEXT NOT NULL, " +
         "server_modified INTEGER, " +      // Can be null. Integer milliseconds.
         "local_modified INTEGER, " +       // Can be null. Client clock. In extremis only.
-        "is_deleted TINYINT, " +           // Boolean. Locally deleted.
-        "should_upload TINYINT " +         // Boolean.
+        "is_deleted TINYINT NOT NULL, " +  // Boolean. Locally deleted.
+        "should_upload TINYINT NOT NULL" + // Boolean. Set when changed or visits added.
         ") "
 
-        let remoteVisits =
-        "CREATE TABLE IF NOT EXISTS \(TableRemoteVisits) (" +
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-        "siteID INTEGER NOT NULL REFERENCES \(TableHistory)(id) ON DELETE CASCADE, " +
-        "date REAL NOT NULL, " +           // Microseconds.
-        "type INTEGER NOT NULL " +
-        ") "
-
-        let localVisits =
-        "CREATE TABLE IF NOT EXISTS \(TableLocalVisits) (" +
+        // Right now we don't need to track per-visit deletions: Sync can't
+        // represent them! See Bug 1157553 Comment 6.
+        // We flip the should_upload flag on the history item when we add a visit.
+        // If we ever want to support logic like not bothering to sync if we added
+        // and then rapidly removed a visit, then we need an 'is_new' flag on each visit.
+        let visits =
+        "CREATE TABLE IF NOT EXISTS \(TableVisits) (" +
         "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
         "siteID INTEGER NOT NULL REFERENCES \(TableHistory)(id) ON DELETE CASCADE, " +
         "date REAL NOT NULL, " +           // Microseconds.
         "type INTEGER NOT NULL, " +
-        "is_new TINYINT DEFAULT 1 " +      // Bool. Flipped to false when synced.
+        "is_local TINYINT NOT NULL, " +
+        "UNIQUE (siteID, date, type) " +
         ") "
-
-        let allVisits =
-        "CREATE VIEW IF NOT EXISTS \(ViewAllVisits) AS " +
-        "SELECT siteID, date, type FROM (" +
-        "SELECT siteID, date, type FROM \(TableLocalVisits) " +
-        "UNION ALL " +
-        "SELECT siteID, date, type FROM \(TableRemoteVisits)" +
-        ")"
 
         let faviconSites =
         "CREATE TABLE IF NOT EXISTS \(TableFaviconSites) (" +
@@ -196,8 +181,8 @@ public class BrowserTable: Table {
         ") "
 
         let queries = [
-            history, localVisits, remoteVisits, bookmarks, faviconSites,
-            allVisits, widestFavicons, historyIDsWithIcon, iconForURL,
+            history, visits, bookmarks, faviconSites,
+            widestFavicons, historyIDsWithIcon, iconForURL,
         ]
         assert(queries.count == AllTablesAndViews.count, "Did you forget to add your table or view to the list?")
         return self.run(db, queries: queries) &&
@@ -242,7 +227,6 @@ public class BrowserTable: Table {
         log.debug("Dropping all browser tables.")
         let additional = [
             "DROP TABLE IF EXISTS faviconSites",  // We renamed it to match naming convention.
-            "DROP TABLE IF EXISTS visits",        // We split this into local and remote.
         ]
         let queries = AllViews.map { "DROP VIEW IF EXISTS \($0!)" } +
                       AllTables.map { "DROP TABLE IF EXISTS \($0!)" } +
