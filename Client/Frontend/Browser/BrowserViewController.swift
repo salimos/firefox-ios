@@ -51,7 +51,6 @@ class BrowserViewController: UIViewController {
 
     // Scroll management properties
     private var previousScroll: CGPoint?
-    private var startOffset: CGFloat?
 
     private var headerConstraint: Constraint?
     private var headerConstraintOffset: CGFloat = 0
@@ -136,18 +135,19 @@ class BrowserViewController: UIViewController {
         // performs a device rotation. Since scrolling calls
         // _updateVisibleContentRects (https://github.com/WebKit/webkit/blob/master/Source/WebKit2/UIProcess/API/Cocoa/WKWebView.mm#L1430)
         // this method nudges the web view's scroll view by a single pixel to force it to invalidate.
-        if let tab = self.tabManager.selectedTab {
-            let contentOffset = tab.webView.scrollView.contentOffset
+        if let scrollView = self.tabManager.selectedTab?.webView.scrollView {
+            let contentOffset = scrollView.contentOffset
             coordinator.animateAlongsideTransition({ context in
                 self.updateHeaderFooterConstraintsAndAlpha(
                     headerOffset: 0,
                     footerOffset: 0,
                     readerOffset: 0,
                     alpha: 1)
+                self.view.layoutIfNeeded()
 
-                tab.webView.scrollView.setContentOffset(CGPoint(x: contentOffset.x, y: contentOffset.y + 1), animated: true)
+                scrollView.setContentOffset(CGPoint(x: contentOffset.x, y: contentOffset.y + 1), animated: true)
             }, completion: { context in
-                tab.webView.scrollView.setContentOffset(CGPoint(x: contentOffset.x, y: contentOffset.y), animated: false)
+                scrollView.setContentOffset(CGPoint(x: contentOffset.x, y: contentOffset.y), animated: false)
             })
         }
     }
@@ -177,8 +177,7 @@ class BrowserViewController: UIViewController {
         self.view.addSubview(footer)
         footer.addSubview(snackBars)
         snackBars.backgroundColor = UIColor.clearColor()
-
-        updateToolbarStateForTraitCollection(self.traitCollection)
+        self.updateToolbarStateForTraitCollection(self.traitCollection)
     }
 
     func startTrackingAccessibilityStatus() {
@@ -238,20 +237,19 @@ class BrowserViewController: UIViewController {
         }
 
         webViewContainer.snp_remakeConstraints { make in
-            make.left.right.bottom.equalTo(self.view)
+            make.left.right.equalTo(self.view)
 
-            if readerModeBar.hidden {
-                self.startOffset = self.header.frame.size.height
-                make.top.equalTo(self.header.snp_bottom).offset(-self.startOffset!)
+            if !self.readerModeBar.hidden {
+                make.top.equalTo(self.readerModeBar.snp_bottom)
             } else {
-                self.startOffset = self.header.frame.size.height + self.readerModeBar.frame.size.height
-                make.top.equalTo(self.readerModeBar.snp_bottom).offset(-self.startOffset!)
+                make.top.equalTo(self.header.snp_bottom)
             }
 
-            self.tabManager.selectedTab?.webView.scrollView.contentInset =
-                UIEdgeInsets(top: self.startOffset!, left: 0, bottom: 0, right: 0)
-            self.tabManager.selectedTab?.webView.scrollView.scrollIndicatorInsets =
-                UIEdgeInsets(top: self.startOffset!, left: 0, bottom: 0, right: 0)
+            if let toolbar = self.toolbar {
+                make.bottom.equalTo(toolbar.snp_top)
+            } else {
+                make.bottom.equalTo(self.view)
+            }
         }
 
         // Setup the bottom toolbar
@@ -823,12 +821,26 @@ extension BrowserViewController: UIScrollViewDelegate {
 
     // Careful! This method can be called multiple times concurrently.
     func scrollViewDidScroll(scrollView: UIScrollView) {
-        if let tab = tabManager.selectedTab, let prev = self.previousScroll, let startOffset = self.startOffset {
+        if let tab = tabManager.selectedTab, let prev = self.previousScroll {
             let dy = prev.y - scrollView.contentOffset.y
+            let scrollingSize = scrollView.contentSize.height - scrollView.frame.size.height
+            var totalToolbarHeight = self.header.frame.size.height
+            totalToolbarHeight += !self.readerModeBar.hidden ? self.readerModeBar.frame.size.height : 0
+            totalToolbarHeight += self.toolbar?.frame.size.height ?? 0
 
+            // Only scroll away our toolbars if,
             if !tab.loading &&
-                scrollView.contentOffset.y > -startOffset  &&
-                scrollView.contentOffset.y < scrollView.contentSize.height {
+
+                // There is enough web content to fill the screen if the scroll bars are fulling animated out
+                scrollView.contentSize.height > (scrollView.frame.size.height + totalToolbarHeight) &&
+
+                // The user is scrolling through the content and not because of the bounces that
+                // happens when you pull up past the content
+                scrollView.contentOffset.y > 0 &&
+
+                // The user has reached the limit as to which they can scroll to
+                scrollView.contentOffset.y < scrollingSize {
+
                 self.scrollFooter(dy)
                 self.scrollHeader(dy)
                 self.scrollReader(dy)
@@ -842,21 +854,17 @@ extension BrowserViewController: UIScrollViewDelegate {
         targetContentOffset: UnsafeMutablePointer<CGPoint>) {
         self.previousScroll = nil
 
-        if shouldAnimateToolbarsOpened() {
-            showToolbars(animated: true)
-        } else if shouldAnimateToolbarsClosed() {
-            hideToolbars(animated: true)
+        let totalOffset = self.header.frame.size.height - AppConstants.StatusBarHeight
+        if self.headerConstraintOffset > -totalOffset {
+
+            // Whenever we try running an animation from the scrollViewWillEndDragging delegate method,
+            // it calls layoutSubviews so many times that it ends up clobbering any animations we want to
+            // run from here. This dispatch_async places the animation onto the main queue for processing after
+            // the scrollView has placed it's work on it already
+            dispatch_async(dispatch_get_main_queue()) {
+                self.showToolbars(animated: true)
+            }
         }
-    }
-
-    func shouldAnimateToolbarsClosed() -> Bool {
-        let totalOffset = self.header.frame.size.height - AppConstants.StatusBarHeight
-        return self.headerConstraintOffset <= -(totalOffset / 2) && self.headerConstraintOffset > -totalOffset
-    }
-
-    func shouldAnimateToolbarsOpened() -> Bool {
-        let totalOffset = self.header.frame.size.height - AppConstants.StatusBarHeight
-        return self.headerConstraintOffset < 0 && self.headerConstraintOffset > -(totalOffset / 2)
     }
 
     func scrollViewShouldScrollToTop(scrollView: UIScrollView) -> Bool {
