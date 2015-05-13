@@ -138,25 +138,6 @@ extension MockSyncableHistory: SyncableHistory {
     }
 }
 
-extension MockSyncableHistory: BrowserHistory {
-    public func clear() -> Success {
-        self.remoteVisits.removeAll(keepCapacity: true)
-        self.localVisits.removeAll(keepCapacity: true)
-        self.mirrorPlaces.removeAll(keepCapacity: true)
-        self.localPlaces.removeAll(keepCapacity: true)
-
-        return succeed()
-    }
-
-    public func get(options: QueryOptions?) -> Deferred<Result<Cursor>> {
-
-    }
-
-    public func addVisit(visit: SiteVisit) -> Success {
-        self.localVisits[visit.]
-    }
-}
-
 
 public class HistorySynchronizer: BaseSingleCollectionSynchronizer, Synchronizer {
     public required init(scratchpad: Scratchpad, delegate: SyncDelegate, basePrefs: Prefs) {
