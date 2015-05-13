@@ -9,24 +9,34 @@ import XCGLogger
 typealias Args = [AnyObject?]
 
 let TableBookmarks = "bookmarks"
+
+let TableFavicons = "favicons"
 let TableHistory = "history"
-let TableVisits = "visits"
-let TableFaviconSites = "faviconSites"
+let TableRemoteVisits = "remote_visits"
+let TableLocalVisits = "local_visits"
+let TableFaviconSites = "favicon_sites"
+
+let ViewAllVisits = "all_visits"
 let ViewWidestFaviconsForSites = "view_favicons_widest"
 let ViewHistoryIDsWithWidestFavicons = "view_history_id_favicon"
 let ViewIconForURL = "view_icon_for_url"
 
 private let AllTables: Args = [
     TableFaviconSites,
-    TableVisits,
+
     TableHistory,
+
+    TableRemoteVisits,
+    TableLocalVisits,
+
     TableBookmarks,
 ]
 
 private let AllViews: Args = [
+    ViewAllVisits,
     ViewHistoryIDsWithWidestFavicons,
     ViewWidestFaviconsForSites,
-    ViewIconForURL
+    ViewIconForURL,
 ]
 
 private let AllTablesAndViews: Args = AllViews + AllTables
@@ -39,7 +49,7 @@ private let log = XCGLogger.defaultInstance()
  */
 public class BrowserTable: Table {
     var name: String { return "BROWSER" }
-    var version: Int { return 1 }
+    var version: Int { return 2 }
 
     public init() {
     }
@@ -93,56 +103,86 @@ public class BrowserTable: Table {
 
     func create(db: SQLiteDBConnection, version: Int) -> Bool {
         // We ignore the version.
+
+
+        // TODO: tracking deletions. What does it mean to delete a history item?
+        // TODO: shared Places table -- just id, url, guid. Rely on guid replacement coming down.
+        // TODO: delete by GUID?
+          // -- remove all local visits
+          // -- mark as deleted, remove URL
+          // -- if new visits are synced down for that guid, what do we do?
+
         let history =
         "CREATE TABLE IF NOT EXISTS \(TableHistory) (" +
         "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-        "guid TEXT NOT NULL UNIQUE, " +
+        "guid TEXT UNIQUE NOT NULL, " +    // Not null, but the value might be replaced by the server's.
         "url TEXT NOT NULL UNIQUE, " +
-        "title TEXT NOT NULL " +
+        "title TEXT NOT NULL, " +
+        "server_modified INTEGER, " +      // Can be null. Integer milliseconds.
+        "local_modified INTEGER, " +       // Can be null. Client clock. In extremis only.
+        "is_deleted TINYINT, " +           // Boolean. Locally deleted.
+        "should_upload TINYINT " +         // Boolean.
         ") "
 
-        let visits =
-        "CREATE TABLE IF NOT EXISTS \(TableVisits) (" +
+        let remoteVisits =
+        "CREATE TABLE IF NOT EXISTS \(TableRemoteVisits) (" +
         "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
         "siteID INTEGER NOT NULL REFERENCES \(TableHistory)(id) ON DELETE CASCADE, " +
-        "date REAL NOT NULL, " +
+        "date REAL NOT NULL, " +           // Microseconds.
         "type INTEGER NOT NULL " +
         ") "
+
+        let localVisits =
+        "CREATE TABLE IF NOT EXISTS \(TableLocalVisits) (" +
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+        "siteID INTEGER NOT NULL REFERENCES \(TableHistory)(id) ON DELETE CASCADE, " +
+        "date REAL NOT NULL, " +           // Microseconds.
+        "type INTEGER NOT NULL, " +
+        "is_new TINYINT DEFAULT 1 " +      // Bool. Flipped to false when synced.
+        ") "
+
+        let allVisits =
+        "CREATE VIEW IF NOT EXISTS \(ViewAllVisits) AS " +
+        "SELECT siteID, date, type FROM (" +
+        "SELECT siteID, date, type FROM \(TableLocalVisits) " +
+        "UNION ALL " +
+        "SELECT siteID, date, type FROM \(TableRemoteVisits)" +
+        ")"
 
         let faviconSites =
         "CREATE TABLE IF NOT EXISTS \(TableFaviconSites) (" +
         "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
         "siteID INTEGER NOT NULL REFERENCES \(TableHistory)(id) ON DELETE CASCADE, " +
-        "faviconID INTEGER NOT NULL REFERENCES favicons(id) ON DELETE CASCADE, " +
+        "faviconID INTEGER NOT NULL REFERENCES \(TableFavicons)(id) ON DELETE CASCADE, " +
         "UNIQUE (siteID, faviconID) " +
         ") "
 
         let widestFavicons =
         "CREATE VIEW IF NOT EXISTS \(ViewWidestFaviconsForSites) AS " +
         "SELECT " +
-        "faviconSites.siteID AS siteID, " +
-        "favicons.id AS iconID, " +
-        "favicons.url AS iconURL, " +
-        "favicons.date AS iconDate, " +
-        "favicons.type AS iconType, " +
-        "MAX(favicons.width) AS iconWidth " +
-        "FROM faviconSites, favicons WHERE " +
-        "faviconSites.faviconID = favicons.id " +
+        "\(TableFaviconSites).siteID AS siteID, " +
+        "\(TableFavicons).id AS iconID, " +
+        "\(TableFavicons).url AS iconURL, " +
+        "\(TableFavicons).date AS iconDate, " +
+        "\(TableFavicons).type AS iconType, " +
+        "MAX(\(TableFavicons).width) AS iconWidth " +
+        "FROM \(TableFaviconSites), \(TableFavicons) WHERE " +
+        "\(TableFaviconSites).faviconID = \(TableFavicons).id " +
         "GROUP BY siteID "
 
         let historyIDsWithIcon =
         "CREATE VIEW IF NOT EXISTS \(ViewHistoryIDsWithWidestFavicons) AS " +
-        "SELECT history.id AS id, " +
+        "SELECT \(TableHistory).id AS id, " +
         "iconID, iconURL, iconDate, iconType, iconWidth " +
-        "FROM history " +
+        "FROM \(TableHistory) " +
         "LEFT OUTER JOIN " +
         "\(ViewWidestFaviconsForSites) ON history.id = \(ViewWidestFaviconsForSites).siteID "
 
         let iconForURL =
         "CREATE VIEW IF NOT EXISTS \(ViewIconForURL) AS " +
         "SELECT history.url AS url, icons.iconID AS iconID FROM " +
-        "history, \(ViewWidestFaviconsForSites) AS icons WHERE " +
-        "history.id = icons.siteID "
+        "\(TableHistory), \(ViewWidestFaviconsForSites) AS icons WHERE " +
+        "\(TableHistory).id = icons.siteID "
 
         let bookmarks =
         "CREATE TABLE IF NOT EXISTS \(TableBookmarks) (" +
@@ -150,14 +190,14 @@ public class BrowserTable: Table {
         "guid TEXT NOT NULL UNIQUE, " +
         "type TINYINT NOT NULL, " +
         "url TEXT, " +
-        "parent INTEGER REFERENCES bookmarks(id) NOT NULL, " +
-        "faviconID INTEGER REFERENCES favicons(id) ON DELETE SET NULL, " +
+        "parent INTEGER REFERENCES \(TableBookmarks)(id) NOT NULL, " +
+        "faviconID INTEGER REFERENCES \(TableFavicons)(id) ON DELETE SET NULL, " +
         "title TEXT" +
         ") "
 
         let queries = [
-            history, visits, bookmarks, faviconSites,
-            widestFavicons, historyIDsWithIcon, iconForURL,
+            history, localVisits, remoteVisits, bookmarks, faviconSites,
+            allVisits, widestFavicons, historyIDsWithIcon, iconForURL,
         ]
         assert(queries.count == AllTablesAndViews.count, "Did you forget to add your table or view to the list?")
         return self.run(db, queries: queries) &&
@@ -200,8 +240,14 @@ public class BrowserTable: Table {
 
     func drop(db: SQLiteDBConnection) -> Bool {
         log.debug("Dropping all browser tables.")
+        let additional = [
+            "DROP TABLE IF EXISTS faviconSites",  // We renamed it to match naming convention.
+            "DROP TABLE IF EXISTS visits",        // We split this into local and remote.
+        ]
         let queries = AllViews.map { "DROP VIEW IF EXISTS \($0!)" } +
-                      AllTables.map { "DROP TABLE IF EXISTS \($0!)" }
+                      AllTables.map { "DROP TABLE IF EXISTS \($0!)" } +
+                      additional
+
         return self.run(db, queries: queries)
     }
 }

@@ -140,18 +140,23 @@ extension SQLiteHistory {
 }
 
 extension SQLiteHistory: BrowserHistory {
+
+    // Note: clearing history isn't really a sane concept in the presence of Sync.
+    // This method should be split to do something else.
     public func clearHistory() -> Success {
         let s: Site? = nil
         var err: NSError? = nil
 
-        // TODO: this should happen asynchronously.
         db.withWritableConnection(&err) { (conn, inout err: NSError?) -> Int in
-            err = conn.executeChange("DELETE FROM visits", withArgs: nil)
+            err = conn.executeChange("DELETE FROM \(TableRemoteVisits)", withArgs: nil)
             if err == nil {
-                err = conn.executeChange("DELETE FROM faviconSites", withArgs: nil)
+                err = conn.executeChange("DELETE FROM \(TableLocalVisits)", withArgs: nil)
             }
             if err == nil {
-                err = conn.executeChange("DELETE FROM history", withArgs: nil)
+                err = conn.executeChange("DELETE FROM \(TableFaviconSites)", withArgs: nil)
+            }
+            if err == nil {
+                err = conn.executeChange("DELETE FROM \(TableHistory)", withArgs: nil)
             }
             return 1
         }
@@ -179,13 +184,10 @@ extension SQLiteHistory: BrowserHistory {
             return deferResult(IgnoredSiteError())
         }
 
-        // TODO: at this point we need to 'shadow' the mirrored site, if the
-        // remote is still authoritative.
-        // For now, we just update-or-insert on our one and only table.
-        // TODO: also set modified times.
         db.withWritableConnection(&err) { (conn, inout err: NSError?) -> Int in
-            let update = "UPDATE history SET title = ? WHERE url = ?"
-            let updateArgs: Args? = [site.title, site.url]
+            let now = NSDate.nowNumber()
+            let update = "UPDATE \(TableHistory) SET title = ?, local_modified = ?, is_deleted = 0, should_upload = 1 WHERE url = ?"
+            let updateArgs: Args? = [site.title, site.url, now]
             err = conn.executeChange(update, withArgs: updateArgs)
             if err != nil {
                 return 0
@@ -195,8 +197,8 @@ extension SQLiteHistory: BrowserHistory {
             }
 
             // Insert instead.
-            let insert = "INSERT INTO history (guid, url, title) VALUES (?, ?, ?)"
-            let insertArgs: Args? = [Bytes.generateGUID(), site.url, site.title]
+            let insert = "INSERT INTO \(TableHistory) (guid, url, title, local_modified, should_upload) VALUES (?, ?, ?, ?, 1)"
+            let insertArgs: Args? = [Bytes.generateGUID(), site.url, site.title, now]
             err = conn.executeChange(insert, withArgs: insertArgs)
             if err != nil {
                 return 0
@@ -211,8 +213,8 @@ extension SQLiteHistory: BrowserHistory {
     func addLocalVisitForExistingSite(visit: SiteVisit) -> Success {
         var err: NSError? = nil
         db.withWritableConnection(&err) { (conn, inout err: NSError?) -> Int in
-            let insert = "INSERT INTO visits (siteID, date, type) VALUES (" +
-                         "(SELECT id FROM history WHERE url = ?), ?, ?)"
+            let insert = "INSERT INTO \(TableLocalVisits) (siteID, date, type) VALUES (" +
+                         "(SELECT id FROM \(TableHistory) WHERE url = ?), ?, ?)"
             let realDate = NSNumber(unsignedLongLong: visit.date)
             let insertArgs: Args? = [visit.site.url, realDate, visit.type.rawValue]
             err = conn.executeChange(insert, withArgs: insertArgs)
@@ -284,19 +286,19 @@ extension SQLiteHistory: BrowserHistory {
         let whereClause: String
         if let filter = filter {
             args = ["%\(filter)%", "%\(filter)%"]
-            whereClause = " WHERE ((history.url LIKE ?) OR (history.title LIKE ?)) "
+            whereClause = " WHERE ((\(TableHistory).url LIKE ?) OR (\(TableHistory).title LIKE ?)) "
         } else {
             args = []
             whereClause = " "
         }
 
         let historySQL =
-        "SELECT history.id AS historyID, history.url AS url, title, guid, " +
-        "max(visits.date) AS visitDate, " +
-        "count(visits.id) AS visitCount " +
-        "FROM history INNER JOIN visits ON visits.siteID = history.id " +
+        "SELECT \(TableHistory).id AS historyID, \(TableHistory).url AS url, title, guid, " +
+        "max(\(ViewAllVisits).date) AS visitDate, " +
+        "count(\(ViewAllVisits).date) AS visitCount " +
+        "FROM \(TableHistory) INNER JOIN \(ViewAllVisits) ON \(ViewAllVisits).siteID = \(TableHistory).id " +
         whereClause +
-        "GROUP BY history.id " +
+        "GROUP BY \(TableHistory).id " +
         orderBy
         "LIMIT \(limit) "
 
@@ -322,9 +324,9 @@ extension SQLiteHistory: Favicons {
         var err: NSError? = nil
 
         db.withWritableConnection(&err) { (conn, inout err: NSError?) -> Int in
-            err = conn.executeChange("DELETE FROM faviconSites", withArgs: nil)
+            err = conn.executeChange("DELETE FROM \(TableFaviconSites)", withArgs: nil)
             if err == nil {
-                err = conn.executeChange("DELETE FROM favicons", withArgs: nil)
+                err = conn.executeChange("DELETE FROM \(TableFavicons)", withArgs: nil)
             }
             return 1
         }
@@ -373,9 +375,9 @@ extension SQLiteHistory: Favicons {
             return deferResult(icon.id!)
         }
 
-        let siteSubselect = "(SELECT id FROM history WHERE url = ?)"
-        let iconSubselect = "(SELECT id FROM favicons WHERE url = ?)"
-        let insertOrIgnore = "INSERT OR IGNORE INTO faviconSites(siteID, faviconID) VALUES "
+        let siteSubselect = "(SELECT id FROM \(TableHistory) WHERE url = ?)"
+        let iconSubselect = "(SELECT id FROM \(TableFavicons) WHERE url = ?)"
+        let insertOrIgnore = "INSERT OR IGNORE INTO \(TableFaviconSites)(siteID, faviconID) VALUES "
         if let iconID = icon.id {
             // Easy!
             if let siteID = site.id {
