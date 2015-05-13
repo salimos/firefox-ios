@@ -187,9 +187,11 @@ extension SQLiteHistory: BrowserHistory {
         db.withWritableConnection(&err) { (conn, inout err: NSError?) -> Int in
             let now = NSDate.nowNumber()
             let update = "UPDATE \(TableHistory) SET title = ?, local_modified = ?, is_deleted = 0, should_upload = 1 WHERE url = ?"
-            let updateArgs: Args? = [site.title, site.url, now]
+            let updateArgs: Args? = [site.title, now, site.url]
+            log.debug("Setting title to \(site.title) for URL \(site.url)")
             err = conn.executeChange(update, withArgs: updateArgs)
             if err != nil {
+                log.warning("Update failed with \(err?.localizedDescription)")
                 return 0
             }
             if conn.numberOfRowsModified > 0 {
@@ -401,5 +403,52 @@ extension SQLiteHistory: Favicons {
         // The worst.
         let args: Args? = [site.url, icon.url]
         return doChange("\(insertOrIgnore) (\(siteSubselect), \(iconSubselect))", args)
+    }
+}
+
+extension SQLiteHistory: SyncableHistory {
+    // TODO: alter this implementation to reflect split tables.
+    public func ensurePlaceWithURL(url: String, hasGUID guid: GUID) -> Success {
+        let args: Args = [guid, url]
+        return self.run("UPDATE \(TableHistory) SET guid = ? WHERE url = ?", withArgs: args)
+    }
+
+    public func changeGUID(old: GUID, new: GUID) -> Success {
+        let args: Args = [new, old]
+        return self.run("UPDATE \(TableHistory) SET guid = ? WHERE guid = ?", withArgs: args)
+    }
+
+    public func deleteByGUID(guid: GUID, deletedAt: Timestamp) -> Success {
+        let args: Args = [guid]
+        return self.run("DELETE FROM \(TableHistory) WHERE guid = ?", withArgs: args)
+    }
+
+    private func removeRemoteVisitsForSiteID(siteID: Int) -> Success {
+        let args: Args = [siteID]
+        return self.run("DELETE FROM \(TableRemoteVisits) WHERE siteID = ?", withArgs: args)
+    }
+
+    public func insertOrReplaceRemoteVisits(visits: [Visit], forGUID guid: GUID) -> Success {
+        // Strip out existing local visits (assuming identical timestamps).
+        // Then replace the remote visit entries with the provided set.
+        // For now, just dump in place.
+        let insertVisits = { (siteID: Int) -> Success in
+            let visitArgs = visits.map { (visit: Visit) -> Args in
+                let realDate = NSNumber(unsignedLongLong: visit.date)
+                let args: Args = [siteID, realDate, visit.type.rawValue]
+                return args
+            }
+            return self.bulkInsert(TableRemoteVisits, columns: ["siteID", "date", "type"], values: visitArgs)
+        }
+
+        let getSiteID = deferResult(0)
+        let removeRemoteVisits = getSiteID >>== self.removeRemoteVisitsForSiteID
+        let doAddRemoteVisits = { getSiteID >>== insertVisits }
+
+        return removeRemoteVisits >>> doAddRemoteVisits
+    }
+
+    public func insertOrUpdatePlace(place: RemotePlace) -> Deferred<Result<GUID>> {
+        return deferResult(place.guid)
     }
 }
