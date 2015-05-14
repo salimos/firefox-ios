@@ -263,7 +263,7 @@ public class BrowserProfile: Profile {
             let delegate = self.getSyncDelegate()
             let syncClients = curry(BrowserProfile.syncClientsToStorage)(storage, delegate, syncPrefs)
             let syncTabs = curry(BrowserProfile.syncTabsToStorage)(storage, delegate, syncPrefs)
-            let syncHistory = curry(BrowserProfile.stubSyncHistory)(MockSyncableHistory(), delegate, syncPrefs)
+            let syncHistory = curry(BrowserProfile.stubSyncHistory)(self.history, delegate, syncPrefs)
             return ready
               >>== syncClients
               >>== syncHistory       // For testing.
