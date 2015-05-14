@@ -163,6 +163,13 @@ extension SQLiteHistory {
 }
 
 extension SQLiteHistory: BrowserHistory {
+    public func removeHistoryForURL(url: String) -> Success {
+        let markArgs: Args = [NSDate.nowNumber(), url]
+        let markDeleted = "UPDATE \(TableHistory) SET is_deleted = 1, should_upload = 1, local_modified = ? WHERE url = ?"
+        let visitArgs: Args = [url]
+        let deleteVisits = "DELETE FROM \(TableVisits) WHERE siteID = (SELECT id FROM \(TableHistory) WHERE url = ?)"
+        return self.run(deleteVisits, withArgs: visitArgs) >>> { self.run(markDeleted, withArgs: markArgs) }
+    }
 
     // Note: clearing history isn't really a sane concept in the presence of Sync.
     // This method should be split to do something else.
