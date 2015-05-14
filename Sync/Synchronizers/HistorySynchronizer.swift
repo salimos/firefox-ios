@@ -185,6 +185,11 @@ public class HistorySynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
             }
         }
 
+        // TODO: a much more efficient way to do this is to:
+        // 1. Start a transaction.
+        // 2. Try to update each place. Note failures.
+        // 3. bulkInsert all failed updates in one go.
+        // 4. Store all remote visits for all places in one go, constructing a single sequence of visits.
         return allSucceed(records.map(applyRecord))
            >>> {
             log.debug("Bumping fetch timestamp to \(fetched).")
