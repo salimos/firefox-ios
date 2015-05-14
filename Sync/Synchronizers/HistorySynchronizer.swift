@@ -198,6 +198,9 @@ public class HistorySynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
         }
     }
 
+    private func uploadOutgoingFromStorage(storage: SyncableHistory, withServer storageClient: Sync15CollectionClient<HistoryPayload>) -> Success {
+        return succeed()
+    }
 
 
     public func synchronizeLocalHistory(history: SyncableHistory, withServer storageClient: Sync15StorageClient, info: InfoCollections) -> Success {
@@ -212,6 +215,7 @@ public class HistorySynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
 
             return historyClient.getSince(since)
               >>== { self.applyIncomingToStorage(history, response: $0) }
+               >>> { self.uploadOutgoingFromStorage(history, withServer: historyClient) }
         }
 
         log.error("Couldn't make history factory.")
