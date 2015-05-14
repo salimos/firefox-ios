@@ -206,9 +206,8 @@ public class HistorySynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
         if let encrypter = keys?.encrypter(self.collection, encoder: encoder) {
             let historyClient = storageClient.clientForCollection(self.collection, encrypter: encrypter)
 
-            let since: Timestamp = 0       // self.lastFetched
+            let since: Timestamp = self.lastFetched
 
-            // TODO: wipe if we're starting over.
             // TODO: buffer downloaded records. Do this by marking items as unprocessed?
 
             return historyClient.getSince(since)
