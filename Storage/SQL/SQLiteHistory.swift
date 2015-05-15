@@ -588,4 +588,86 @@ extension SQLiteHistory: SyncableHistory {
         return self.ensurePlaceWithURL(place.url, hasGUID: place.guid)
             >>> { self.metadataForGUID(place.guid) >>== insertWithMetadata }
     }
+
+    public func getHistoryToUpload() -> Deferred<Result<[(Place, [Visit])]>> {
+        // What we want to do: find all items flagged for update, selecting some number of their
+        // visits alongside.
+        //
+        // A difficulty here: we don't want to fetch *all* visits, only some number of the most recent.
+        // (It's not enough to only get new ones, because the server record should contain more.)
+        //
+        // That's the greatest-N-per-group problem in SQL. Please read and understand the solution
+        // to this (particularly how the LEFT OUTER JOIN/HAVING clause works) before changing this query!
+        //
+        // We can do this in a single query, rather than the N+1 that desktop takes.
+        // We then need to flatten the cursor. We do that by collecting
+        // places as a side-effect of the factory, producing visits as a result, and merging in memory.
+
+        let args: Args = [
+            20,                 // Maximum number of visits to retrieve.
+        ]
+
+        let filter = "history.should_upload = 1"
+
+        let sql =
+        "SELECT " +
+        "history.id AS siteID, history.guid AS guid, history.url AS url, history.title AS title, " +
+        "v1.siteID AS siteID, v1.date AS visitDate, v1.type AS visitType " +
+        "FROM " +
+        "visits AS v1 " +
+        "JOIN history ON history.id = v1.siteID AND \(filter) " +
+        "LEFT OUTER JOIN " +
+        "visits AS v2 " +
+        "ON v1.siteID = v2.siteID AND v1.date < v2.date " +
+        "GROUP BY v1.date " +
+        "HAVING COUNT(*) < ? " +
+        "ORDER BY v1.siteID, v1.date DESC"
+
+        var places = [Int: Place]()
+        var visits = [Int: [Visit]]()
+
+        // Add a place to the accumulator, prepare to accumulate visits, return the ID.
+        let ensurePlace: SDRow -> Int = { row in
+            let id = row["siteID"] as! Int
+            if places[id] == nil {
+                let guid = row["guid"] as! String
+                let url = row["url"] as! String
+                let title = row["title"] as! String
+                places[id] = Place(guid: guid, url: url, title: title)
+                visits[id] = Array()
+            }
+            return id
+        }
+
+        // Store the place and the visit.
+        let factory: SDRow -> Int = { row in
+            let date = row.timestampColumn("visitDate")!
+            let type = VisitType(rawValue: row["visitType"] as! Int)!
+            let visit = Visit(date: date, type: type)
+            let id = ensurePlace(row)
+            visits[id]?.append(visit)
+            return id
+        }
+
+        return self.runQuery(sql, args: args, factory: factory)
+            >>== { c in
+
+                // Consume every row, with the side effect of populating the places
+                // and visit accumulators.
+                let count = c.count
+                var ids = Set<Int>()
+                for i in 0..<count {
+                    // Collect every ID first, so that we're guaranteed to have
+                    // fully populated the visit lists, and we don't have to
+                    // worry about only collecting each place once.
+                    ids.insert(c[i]!)
+                }
+
+                // Now we're done with the cursor. Close it.
+                c.close()
+
+                // Now collect the return value.
+                return deferResult(map(ids, { return (places[$0]!, visits[$0]!) }))
+        }
+    }
 }
