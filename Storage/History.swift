@@ -40,6 +40,8 @@ public protocol SyncableHistory {
 
     func storeRemoteVisits(visits: [Visit], forGUID guid: GUID) -> Success
     func insertOrUpdatePlace(place: RemotePlace) -> Deferred<Result<GUID>>
+
+    func getHistoryToUpload() -> Deferred<Result<[(Place, [Visit])]>>
 }
 
 // TODO: integrate Site with these.

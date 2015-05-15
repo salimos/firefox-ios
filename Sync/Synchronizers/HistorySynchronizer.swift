@@ -136,6 +136,11 @@ extension MockSyncableHistory: SyncableHistory {
             return deferResult(place.guid)
         }
     }
+
+    public func getHistoryToUpload() -> Deferred<Result<[(Place, [Visit])]>> {
+        // TODO.
+        return deferResult([])
+    }
 }
 
 
